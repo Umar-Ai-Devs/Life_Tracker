@@ -54,13 +54,18 @@ const STORAGE_KEYS = {
   ACTIVE_TIMER: 'lifetracker_active_timer_v1',
 };
 
+const isUUID = (str?: string | null): boolean => {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+};
+
 // Default starter categories
 const DEFAULT_CATEGORIES: Category[] = [
-  { id: 'cat-work', user_id: 'local-user', name: 'Work', color: '#3b82f6', icon: 'Briefcase', created_at: new Date().toISOString() },
-  { id: 'cat-dev', user_id: 'local-user', name: 'Engineering', color: '#10b981', icon: 'Code', created_at: new Date().toISOString() },
-  { id: 'cat-design', user_id: 'local-user', name: 'Design', color: '#f59e0b', icon: 'Palette', created_at: new Date().toISOString() },
-  { id: 'cat-personal', user_id: 'local-user', name: 'Personal', color: '#8b5cf6', icon: 'User', created_at: new Date().toISOString() },
-  { id: 'cat-health', user_id: 'local-user', name: 'Health', color: '#ec4899', icon: 'Heart', created_at: new Date().toISOString() },
+  { id: 'cat-work', user_id: 'local-user', name: 'Work', color: '#000000', icon: 'Briefcase', created_at: new Date().toISOString() },
+  { id: 'cat-dev', user_id: 'local-user', name: 'Engineering', color: '#000000', icon: 'Code', created_at: new Date().toISOString() },
+  { id: 'cat-design', user_id: 'local-user', name: 'Design', color: '#000000', icon: 'Palette', created_at: new Date().toISOString() },
+  { id: 'cat-personal', user_id: 'local-user', name: 'Personal', color: '#000000', icon: 'User', created_at: new Date().toISOString() },
+  { id: 'cat-health', user_id: 'local-user', name: 'Health', color: '#000000', icon: 'Heart', created_at: new Date().toISOString() },
 ];
 
 const DEFAULT_PROFILE: UserProfile = {
@@ -96,51 +101,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Initialize data on mount
   useEffect(() => {
-    const init = async () => {
-      const isConfigured = isSupabaseConfigured();
-      setIsSupabaseLive(isConfigured);
+    let isMounted = true;
 
-      if (isConfigured) {
-        try {
-          const supabase = createClient();
-          const { data: { user } } = await supabase.auth.getUser();
-
-          if (user) {
-            // Load user data from Supabase
-            const [tasksRes, categoriesRes, entriesRes, profileRes] = await Promise.all([
-              supabase.from('tasks').select('*').order('created_at', { ascending: false }),
-              supabase.from('categories').select('*'),
-              supabase.from('time_entries').select('*').order('created_at', { ascending: false }),
-              supabase.from('profiles').select('*').eq('id', user.id).single(),
-            ]);
-
-            if (tasksRes.data) setTasks(tasksRes.data);
-            if (categoriesRes.data) setCategories(categoriesRes.data);
-            if (entriesRes.data) {
-              setTimeEntries(entriesRes.data);
-              // Check for active timer
-              const active = entriesRes.data.find((e: TimeEntry) => !e.end_time);
-              if (active) {
-                const startMs = new Date(active.start_time).getTime();
-                const elapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-                setActiveTimer({
-                  entryId: active.id,
-                  taskId: active.task_id,
-                  startTime: active.start_time,
-                  elapsedSeconds: elapsed,
-                });
-              }
-            }
-            if (profileRes.data) setProfile(profileRes.data);
-            setIsLoading(false);
-            return;
-          }
-        } catch (err) {
-          console.warn('Supabase initialization failed, falling back to local store:', err);
-        }
-      }
-
-      // Local storage fallback
+    const loadLocalFallback = () => {
       try {
         const savedCategories = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
         const savedTasks = localStorage.getItem(STORAGE_KEYS.TASKS);
@@ -184,12 +147,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (e) {
         console.error('Error loading local storage data:', e);
-      } finally {
-        setIsLoading(false);
       }
     };
 
+    const init = async () => {
+      const isConfigured = isSupabaseConfigured();
+
+      if (isConfigured) {
+        try {
+          const supabase = createClient();
+          const { data: { user } } = await supabase.auth.getUser();
+
+          if (user) {
+            setIsSupabaseLive(true);
+            // Load user data from Supabase
+            const [tasksRes, categoriesRes, entriesRes, profileRes] = await Promise.all([
+              supabase.from('tasks').select('*').order('created_at', { ascending: false }),
+              supabase.from('categories').select('*'),
+              supabase.from('time_entries').select('*').order('created_at', { ascending: false }),
+              supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+            ]);
+
+            if (tasksRes.data) setTasks(tasksRes.data);
+            if (categoriesRes.data && categoriesRes.data.length > 0) {
+              setCategories(categoriesRes.data);
+            } else {
+              setCategories(DEFAULT_CATEGORIES);
+            }
+            if (entriesRes.data) {
+              setTimeEntries(entriesRes.data);
+              const active = entriesRes.data.find((e: TimeEntry) => !e.end_time);
+              if (active) {
+                const startMs = new Date(active.start_time).getTime();
+                const elapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+                setActiveTimer({
+                  entryId: active.id,
+                  taskId: active.task_id,
+                  startTime: active.start_time,
+                  elapsedSeconds: elapsed,
+                });
+              }
+            }
+            if (profileRes.data) {
+              setProfile(profileRes.data);
+            } else {
+              setProfile((prev) => ({
+                ...prev,
+                id: user.id,
+                email: user.email || '',
+                full_name: user.user_metadata?.full_name || prev.full_name,
+              }));
+            }
+            if (isMounted) setIsLoading(false);
+            return;
+          } else {
+            // Not authenticated yet - run in resilient local demo mode
+            setIsSupabaseLive(false);
+          }
+        } catch (err) {
+          console.warn('Supabase initialization failed, falling back to local store:', err);
+          setIsSupabaseLive(false);
+        }
+      } else {
+        setIsSupabaseLive(false);
+      }
+
+      loadLocalFallback();
+      if (isMounted) setIsLoading(false);
+    };
+
     init();
+
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          setIsSupabaseLive(true);
+          init();
+        } else if (event === 'SIGNED_OUT') {
+          setIsSupabaseLive(false);
+          loadLocalFallback();
+        }
+      });
+
+      return () => {
+        isMounted = false;
+        subscription.unsubscribe();
+      };
+    }
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
 
@@ -242,31 +291,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createTask = useCallback(
     async (data: Partial<Task>): Promise<Task> => {
-      const newTask: Task = {
-        id: isSupabaseLive ? '' : `task-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        user_id: profile.id,
-        title: data.title || 'Untitled Task',
-        description: data.description || '',
-        estimated_duration: Number(data.estimated_duration) || 30,
-        planned_date: data.planned_date || null,
-        start_time: data.start_time || null,
-        deadline: data.deadline || null,
-        priority: (data.priority as Priority) || 'medium',
-        category_id: data.category_id || null,
-        status: (data.status as TaskStatus) || (data.planned_date ? 'todo' : 'inbox'),
-        actual_duration: 0,
-        completed_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      const now = new Date().toISOString();
+      const localId = `task-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
       if (isSupabaseLive) {
         const supabase = createClient();
-        const { data: inserted, error } = await supabase.from('tasks').insert([newTask]).select().single();
-        if (error) throw error;
+        const { data: { user } } = await supabase.auth.getUser();
+        const userId = user?.id || profile.id;
+
+        const payload: Record<string, any> = {
+          user_id: userId,
+          title: data.title || 'Untitled Task',
+          description: data.description || '',
+          estimated_duration: Number(data.estimated_duration) || 30,
+          planned_date: data.planned_date || null,
+          start_time: data.start_time || null,
+          deadline: data.deadline || null,
+          priority: (data.priority as Priority) || 'medium',
+          status: (data.status as TaskStatus) || (data.planned_date ? 'todo' : 'inbox'),
+          actual_duration: 0,
+          completed_at: null,
+          created_at: now,
+          updated_at: now,
+        };
+
+        if (data.category_id && isUUID(data.category_id)) {
+          payload.category_id = data.category_id;
+        } else {
+          payload.category_id = null;
+        }
+
+        const { data: inserted, error } = await supabase.from('tasks').insert([payload]).select().single();
+        if (error) {
+          console.error('Supabase task insert error:', error);
+          throw new Error(error.message || 'Failed to save task to Supabase');
+        }
         setTasks((prev) => [inserted, ...prev]);
         return inserted;
       } else {
+        const newTask: Task = {
+          id: localId,
+          user_id: profile.id,
+          title: data.title || 'Untitled Task',
+          description: data.description || '',
+          estimated_duration: Number(data.estimated_duration) || 30,
+          planned_date: data.planned_date || null,
+          start_time: data.start_time || null,
+          deadline: data.deadline || null,
+          priority: (data.priority as Priority) || 'medium',
+          category_id: data.category_id || null,
+          status: (data.status as TaskStatus) || (data.planned_date ? 'todo' : 'inbox'),
+          actual_duration: 0,
+          completed_at: null,
+          created_at: now,
+          updated_at: now,
+        };
         setTasks((prev) => [newTask, ...prev]);
         return newTask;
       }
@@ -277,7 +356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateTask = useCallback(
     async (id: string, updates: Partial<Task>): Promise<Task> => {
       const now = new Date().toISOString();
-      const updatedFields = { ...updates, updated_at: now };
+      const updatedFields: Record<string, any> = { ...updates, updated_at: now };
 
       if (updates.status === 'completed' && !updates.completed_at) {
         updatedFields.completed_at = now;
@@ -285,7 +364,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updatedFields.completed_at = null;
       }
 
-      if (isSupabaseLive) {
+      if (isSupabaseLive && isUUID(id)) {
+        if ('category_id' in updatedFields) {
+          if (updatedFields.category_id && !isUUID(updatedFields.category_id)) {
+            updatedFields.category_id = null;
+          }
+        }
+
         const supabase = createClient();
         const { data: updated, error } = await supabase
           .from('tasks')
@@ -293,7 +378,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .eq('id', id)
           .select()
           .single();
-        if (error) throw error;
+        if (error) {
+          console.error('Supabase updateTask error:', error);
+          throw new Error(error.message || 'Failed to update task in Supabase');
+        }
         setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
         return updated;
       } else {
@@ -301,7 +389,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTasks((prev) =>
           prev.map((t) => {
             if (t.id === id) {
-              updatedTask = { ...t, ...updatedFields };
+              updatedTask = { ...t, ...updatedFields } as Task;
               return updatedTask;
             }
             return t;
@@ -315,15 +403,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteTask = useCallback(
     async (id: string): Promise<void> => {
-      // If timer is running on this task, stop it
       if (activeTimer && activeTimer.taskId === id) {
         setActiveTimer(null);
       }
 
-      if (isSupabaseLive) {
+      if (isSupabaseLive && isUUID(id)) {
         const supabase = createClient();
         const { error } = await supabase.from('tasks').delete().eq('id', id);
-        if (error) throw error;
+        if (error) console.error('Supabase task delete error:', error);
       }
 
       setTasks((prev) => prev.filter((t) => t.id !== id));
@@ -337,7 +424,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const target = tasks.find((t) => t.id === id);
       if (!target) return;
 
-      // If timer is running on this task, stop it first
       if (activeTimer && activeTimer.taskId === id) {
         await stopTimer();
       }
@@ -357,9 +443,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         planned_date: date,
         start_time: startTime !== undefined ? startTime : null,
       };
-      if (date && (!startTime && startTime !== null)) {
-        // Kept date
-      }
       if (!date) {
         updates.status = 'inbox';
         updates.start_time = null;
@@ -380,22 +463,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createCategory = useCallback(
     async (name: string, color: string, icon = 'Folder'): Promise<Category> => {
-      const newCat: Category = {
-        id: isSupabaseLive ? '' : `cat-${Date.now()}`,
-        user_id: profile.id,
-        name,
-        color,
-        icon,
-        created_at: new Date().toISOString(),
-      };
+      const now = new Date().toISOString();
+      const localId = `cat-${Date.now()}`;
 
       if (isSupabaseLive) {
         const supabase = createClient();
-        const { data, error } = await supabase.from('categories').insert([newCat]).select().single();
-        if (error) throw error;
+        const { data: { user } } = await supabase.auth.getUser();
+        const payload = {
+          user_id: user?.id || profile.id,
+          name,
+          color,
+          icon,
+          created_at: now,
+        };
+        const { data, error } = await supabase.from('categories').insert([payload]).select().single();
+        if (error) throw new Error(error.message || 'Failed to create category');
         setCategories((prev) => [...prev, data]);
         return data;
       } else {
+        const newCat: Category = {
+          id: localId,
+          user_id: profile.id,
+          name,
+          color,
+          icon,
+          created_at: now,
+        };
         setCategories((prev) => [...prev, newCat]);
         return newCat;
       }
@@ -405,13 +498,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteCategory = useCallback(
     async (id: string): Promise<void> => {
-      if (isSupabaseLive) {
+      if (isSupabaseLive && isUUID(id)) {
         const supabase = createClient();
         const { error } = await supabase.from('categories').delete().eq('id', id);
-        if (error) throw error;
+        if (error) console.error('Supabase deleteCategory error:', error);
       }
       setCategories((prev) => prev.filter((c) => c.id !== id));
-      // Unlink category from tasks
       setTasks((prev) => prev.map((t) => (t.category_id === id ? { ...t, category_id: null } : t)));
     },
     [isSupabaseLive]
@@ -423,33 +515,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startTimer = useCallback(
     async (taskId: string): Promise<void> => {
-      // 1. If another timer is running, stop it first to enforce single active timer
       if (activeTimer) {
         if (activeTimer.taskId === taskId) {
-          // Already running this task
           return;
         }
         await stopTimer();
       }
 
       const now = new Date().toISOString();
-      const entryId = isSupabaseLive ? '' : `entry-${Date.now()}`;
+      const localEntryId = `entry-${Date.now()}`;
 
-      const newEntry: TimeEntry = {
-        id: entryId,
-        task_id: taskId,
-        user_id: profile.id,
-        start_time: now,
-        end_time: null,
-        duration: null,
-        notes: null,
-        created_at: now,
-      };
-
-      if (isSupabaseLive) {
+      if (isSupabaseLive && isUUID(taskId)) {
         const supabase = createClient();
-        const { data, error } = await supabase.from('time_entries').insert([newEntry]).select().single();
-        if (error) throw error;
+        const { data: { user } } = await supabase.auth.getUser();
+        const payload = {
+          task_id: taskId,
+          user_id: user?.id || profile.id,
+          start_time: now,
+          end_time: null,
+          duration: null,
+          notes: null,
+          created_at: now,
+        };
+        const { data, error } = await supabase.from('time_entries').insert([payload]).select().single();
+        if (error) {
+          console.error('Supabase startTimer error:', error);
+          throw new Error(error.message || 'Failed to start timer');
+        }
         setActiveTimer({
           entryId: data.id,
           taskId: taskId,
@@ -458,8 +550,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         setTimeEntries((prev) => [data, ...prev]);
       } else {
+        const newEntry: TimeEntry = {
+          id: localEntryId,
+          task_id: taskId,
+          user_id: profile.id,
+          start_time: now,
+          end_time: null,
+          duration: null,
+          notes: null,
+          created_at: now,
+        };
         setActiveTimer({
-          entryId,
+          entryId: localEntryId,
           taskId,
           startTime: now,
           elapsedSeconds: 0,
@@ -467,7 +569,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTimeEntries((prev) => [newEntry, ...prev]);
       }
 
-      // Automatically update task status to in_progress if currently todo/inbox
       const currentTask = tasks.find((t) => t.id === taskId);
       if (currentTask && currentTask.status !== 'in_progress' && currentTask.status !== 'completed') {
         await updateTask(taskId, { status: 'in_progress' });
@@ -491,7 +592,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const currentTask = tasks.find((t) => t.id === activeTimer.taskId);
     const newTotalActual = (currentTask?.actual_duration || 0) + sessionSeconds;
 
-    if (isSupabaseLive) {
+    if (isSupabaseLive && isUUID(activeTimer.entryId)) {
       const supabase = createClient();
       await supabase
         .from('time_entries')
@@ -509,7 +610,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .eq('id', activeTimer.taskId);
     }
 
-    // Update in-memory state
     setTimeEntries((prev) =>
       prev.map((e) =>
         e.id === activeTimer.entryId
@@ -535,29 +635,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const targetDate = date ? new Date(date) : new Date();
       const startTime = targetDate.toISOString();
       const endTime = new Date(targetDate.getTime() + seconds * 1000).toISOString();
-
-      const newEntry: TimeEntry = {
-        id: isSupabaseLive ? '' : `entry-${Date.now()}`,
-        task_id: taskId,
-        user_id: profile.id,
-        start_time: startTime,
-        end_time: endTime,
-        duration: seconds,
-        notes: notes || 'Manual time adjustment',
-        created_at: new Date().toISOString(),
-      };
-
       const currentTask = tasks.find((t) => t.id === taskId);
       const newTotal = (currentTask?.actual_duration || 0) + seconds;
 
-      if (isSupabaseLive) {
+      if (isSupabaseLive && isUUID(taskId)) {
         const supabase = createClient();
-        const { data, error } = await supabase.from('time_entries').insert([newEntry]).select().single();
-        if (error) throw error;
+        const { data: { user } } = await supabase.auth.getUser();
+        const payload = {
+          task_id: taskId,
+          user_id: user?.id || profile.id,
+          start_time: startTime,
+          end_time: endTime,
+          duration: seconds,
+          notes: notes || 'Manual time adjustment',
+          created_at: new Date().toISOString(),
+        };
+        const { data, error } = await supabase.from('time_entries').insert([payload]).select().single();
+        if (error) {
+          console.error('Supabase logManualTime error:', error);
+          throw new Error(error.message || 'Failed to log manual time');
+        }
         await supabase.from('tasks').update({ actual_duration: newTotal }).eq('id', taskId);
         setTimeEntries((prev) => [data, ...prev]);
       } else {
-        setTimeEntries((prev) => [newEntry, ...prev]);
+        const localEntry: TimeEntry = {
+          id: `entry-${Date.now()}`,
+          task_id: taskId,
+          user_id: profile.id,
+          start_time: startTime,
+          end_time: endTime,
+          duration: seconds,
+          notes: notes || 'Manual time adjustment',
+          created_at: new Date().toISOString(),
+        };
+        setTimeEntries((prev) => [localEntry, ...prev]);
       }
 
       setTasks((prev) =>

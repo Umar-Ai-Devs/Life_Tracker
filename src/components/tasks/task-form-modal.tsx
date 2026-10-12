@@ -91,8 +91,9 @@ export function TaskFormModal({ open, onOpenChange, taskToEdit, defaultDate }: P
 
       onOpenChange(false);
     } catch (err: unknown) {
-      console.error(err);
-      setError('An error occurred while saving the task.');
+      console.error('Task save error:', err);
+      const msg = err instanceof Error ? err.message : (err as { message?: string })?.message || 'An error occurred while saving the task.';
+      setError(msg);
     } finally {
       setIsSubmitting(false);
     }
